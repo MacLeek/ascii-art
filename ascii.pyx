@@ -62,7 +62,7 @@ def get_angle_2(v1, v2):
 
 
 class SC(object):
-    def __init__(self, nbins_r=5, nbins_theta=12, r_inner=0.1250, r_outer=2.0):
+    def __init__(self, nbins_r=5, nbins_theta=12, r_inner=0.5, r_outer=2.0):
         self.nbins_r = nbins_r
         self.nbins_theta = nbins_theta
         self.r_inner = r_inner
@@ -311,7 +311,7 @@ def deform(segments, A, B, C):
         l.append(euclid_distance(Pa, p))
         total_length += l[-1]
     for i, p in enumerate(points):
-        d_a += local_deform(p, Pa, Pa_) * l [i] / total_length
+        d_a += local_deform(p, Pa, Pa_) * l[i] / total_length
     return max(d_l, d_a)
 
 
@@ -422,7 +422,7 @@ def prepare_characters(Tw=15, Th=28, font_size=24, ratio=0.9, more_char=True):
         ratio = 0.9
         res = img_data[:, :, 0] < 255 * ratio
         rr = morphology.skeletonize(res)
-        a = SC(r_outer=12)
+        a = SC(r_outer=8)
         points = get_points(rr)
         result = a.compute(points)[0:2]
         letters[i] = [result, len(points[0])]
@@ -431,7 +431,7 @@ def prepare_characters(Tw=15, Th=28, font_size=24, ratio=0.9, more_char=True):
 
 
 def compute_aiss(r, letters):
-    a = SC(r_outer=12)
+    a = SC(r_outer=8)
     points = get_points(r)
     m1 = len(points[0])
     if m1 < 5:
@@ -440,7 +440,7 @@ def compute_aiss(r, letters):
     min_cost = 9999
     let = -1
     for k, v in letters.iteritems():
-        cost = np.linalg.norm(to_test[0] - v[0][0], axis=1).sum() * 1.0 / (m1 + v[1]) ** 0.5
+        cost = np.linalg.norm(to_test[0] - v[0][0], axis=1).sum() * 1.0 / (m1 + v[1])**0.5
         if cost < min_cost:
             min_cost = cost
             let = k
@@ -536,11 +536,11 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
                 rr, cc = line(new_point[0], new_point[1], p[0], p[1])
                 whole[rr, cc] = True
             cur_chosen_cell = (math.floor(point[0] / Th), math.floor(point[1] / Tw))
-            cur_chosen_cell_l = 0
             cur_chosen_cell_D = []
             computed_cells = []
             wrong_point_chosen = False
             for p in near_points:
+                cur_chosen_cell_l = 0
                 cells, l = get_index_and_length(p, point)
                 total_l = sum(l)
                 new_cells, rubbish = get_index_and_length(p, new_point)
@@ -558,17 +558,16 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
                 for index, cell in enumerate(cells):
                     # do not compute the repeated cell again
                     if cell not in computed_cells:
-                        if cell == cur_chosen_cell and cur_chosen_cell_l > 0:
-                            continue
-                        for s in segments:
-                            t_cells, t_l = get_index_and_length(s[0], s[1])
-                            for t_index, t_cell in enumerate(t_cells):
-                                if cell == t_cell:
-                                    D_cell[cell] += t_l[t_index]
-                        # recompute aiss each old cell
-                        img_data = whole[int(cell[0] * Th):int(cell[0] * Th + Th), int(cell[1] * Tw):int(cell[1] * Tw + Tw)]
-                        aiss[cell], final[cell] = compute_aiss(img_data, letters)
-                       # record the chosen cell's total length and partial Deform value
+                        if cell != cur_chosen_cell or cur_chosen_cell_l <= 0:
+                            for s in segments:
+                                t_cells, t_l = get_index_and_length(s[0], s[1])
+                                for t_index, t_cell in enumerate(t_cells):
+                                    if cell == t_cell:
+                                        D_cell[cell] += t_l[t_index]
+                            # recompute aiss each old cell
+                            img_data = whole[int(cell[0] * Th):int(cell[0] * Th + Th), int(cell[1] * Tw):int(cell[1] * Tw + Tw)]
+                            aiss[cell], final[cell] = compute_aiss(img_data, letters)
+                        # record the chosen cell's total length and partial Deform value
                         if cell == cur_chosen_cell:
                             cur_chosen_cell_l = D_cell[cell]
                             cur_chosen_cell_D.append((l[index], D))
@@ -592,9 +591,8 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
             for i, j in zip(*not_empty_cells):
                 D_cell_new[i, j] = D_cell[i, j]
             cur_E = np.sum(np.multiply(D_cell_new, aiss))/np.count_nonzero(aiss)
-            print cur_E
             # break
-            diff = cur_E - E
+            diff = abs(cur_E - E)
             # if energy become less, we continue
             c += 1
             if diff < 0:
@@ -638,3 +636,4 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
                         let = chr(ind)
                 sen += let
             print sen
+        toimage(whole).show()

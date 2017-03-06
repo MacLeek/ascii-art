@@ -23,7 +23,7 @@ ctypedef np.double_t DTYPE_t
 
 Tw = 30 / 2
 Th = 56 / 2
-tolerance = 4
+tolerance = 2
 a1 = 8.0 / math.M_PI
 a2 = 2.0 / min(Tw, Th)
 a3 = 0.5
@@ -91,7 +91,6 @@ class SC(object):
 
     # TODO this is still very slow, boolean type is not implemented in cython numpy
     @cython.boundscheck(False)
-    @cython.wraparound(False)
     def compute(self, points, r=None):
         points1, points2 = points
         cdef np.ndarray[DTYPE_t, ndim=2] r_array = self._dist2(points2, points1)
@@ -121,34 +120,55 @@ class SC(object):
         return BH, theta_array_2, r_array_n
 
 
-def get_neighbors(spot, array):
+def get_neighbors(spot, array, cur):
     neighbors = []
+    extra_neighbors = []
     for row_offset, col_offset in [(-1, 0), (0, -1), (0, 1), (1, 0), (-1, -1), (1, 1), (-1, 1), (1, -1)]:
         pos = (spot[0] + row_offset, spot[1] + col_offset)
         if 0 <= pos[0] < array.shape[0] and 0 <= pos[1] < array.shape[1] and array[pos] == 1:
             neighbors.append(pos)
-            array[pos] = 2
+
+        if 0 <= pos[0] < array.shape[0] and 0 <= pos[1] < array.shape[1] and array[pos] == 3:
+            extra_neighbors.append(pos)
+
+    if not neighbors:
+        neighbors = extra_neighbors
     return neighbors, len(neighbors)
 
 
 def DFS(cur, total, pos, M, tol):
     cur_pos = pos
-    M[cur_pos] = 2
+    if M[cur_pos] == 2 or M[cur_pos] == 3:
+        return
+    if len(cur) > 0:
+        M[cur_pos] = 2
+    else:
+        M[cur_pos] = 3
     cur.append(cur_pos)
-    neignbors, n = get_neighbors(cur_pos, M)
+    neignbors, n = get_neighbors(cur_pos, M, cur)
     while n == 1:
         cur_pos = neignbors[0]
-        M[cur_pos] = 2
+        if M[cur_pos] == 1:
+            M[cur_pos] = 2
         cur.append(cur_pos)
-        neignbors, n = get_neighbors(cur_pos, M)
-    simplified_points = approximate_polygon(np.array(cur), tolerance=tol)
-    total.append(simplified_points)
+        neignbors, n = get_neighbors(cur_pos, M, cur)
+
+    if len(cur) > 1:
+        simplified_points = approximate_polygon(np.array(cur), tolerance=tol)
+        total.append(simplified_points)
+
     if n == 0:
+        M[cur_pos] = 3
         return
+
+    for i in range(n):
+        M[neignbors[i]] = 4
+
     for i in range(n):
         cur = [cur_pos]
         DFS(cur, total, neignbors[i], M, tol)
 
+# TODO improve circle line
 
 def extract_segments(M):
     cur = []
@@ -162,20 +182,26 @@ def extract_segments(M):
 
 
 def display(total):
+    def p_equal(p1, p2):
+        if p1[0,0] == p2[0,0] and p1[0,1] == p2[0,1] and p1[-1,0] == p2[-1,0] and p1[-1,1] == p2[-1,1] and len(p1) == len(p2):
+            print p1
+            print p2
+            return True
+        return False
     import matplotlib.pyplot as plt
     for t in total:
-        if len(t) > 3:
-            plt.plot(t[:, 0], t[:, 1])
+        plt.plot(t[:, 0], t[:, 1])
     plt.show()
 
 
 def generate_polyimage(total, r):
     segments = []
     new_img = np.zeros(r.shape, dtype=bool)
-    for t in total[1:-1]:
+    for t in total:
         cur = t[0]
         for tt in t[1:]:
-            if abs(cur[0] - tt[0]) > 1 or abs(cur[1] - tt[1]) > 1:
+            if tuple(cur) != tuple(tt):
+                # if abs(cur[0] - tt[0]) > 1 or abs(cur[1] - tt[1]) > 1:
                 rr, cc = line(cur[0], cur[1], tt[0], tt[1])
                 segments.append([tuple(cur), tuple(tt)])
                 new_img[rr, cc] = True
@@ -198,9 +224,10 @@ def load_img(ratio, name, Rw):
     except:
         res = img_data[:, :] < 255 * ratio
     r = morphology.skeletonize(res)
+    # toimage(r).show()
     M = r.copy().astype(np.int64)
     total = extract_segments(M)
-    # display(total)
+    display(total)
     return generate_polyimage(total, r), Rh
 
 
@@ -385,9 +412,9 @@ def convert_segments_to_dictionary(segments):
     for index, seg in enumerate(segments):
         for i, t in enumerate(seg):
             if t in segments_hash:
-                segments_hash[t].append((index, i))
+                segments_hash[t].add((index, i))
             else:
-                segments_hash[t] = [(index, i)]
+                segments_hash[t] = set([(index, i)])
             for segment in segments:
                 s, e = segment[0], segment[1]
                 if t == s:
@@ -434,7 +461,7 @@ def compute_aiss(r, letters):
     a = SC(r_outer=8)
     points = get_points(r)
     m1 = len(points[0])
-    if m1 < 5:
+    if m1 < 2:
         return 0, 0
     to_test = a.compute(points)[0:2]
     min_cost = 9999
@@ -470,7 +497,7 @@ def test_once(aiss, final, Rw, Rh, whole, letters):
         print sen
 
 
-def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char=True):
+def image_to_ascii(file_name='/Users/liyang/Desktop/monk_1.bmp', ratio=0.2, Rw=18, perform_deformation=True, more_char=True):
     # -----------------------------------------------
     # calculate letters log polar
     letters = prepare_characters(more_char=more_char)
@@ -478,6 +505,7 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
     # -----------------------------------------------
     # load image and extract segments
     (whole, segments), Rh = load_img(ratio, file_name, Rw)
+    toimage(whole).show()
 
     cdef int c=0
     cdef int c0=0
@@ -499,6 +527,7 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
 
     # -----------------------------------------------
     # TODO WARNING:Currently deformation does not work properly or with an ultra slow speed!
+    # TODO save many E and select min one
     if perform_deformation:
         initial_aiss = np.sum(aiss)
         E = initial_aiss/np.count_nonzero(aiss)
@@ -507,6 +536,7 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
             # backup data
             back_up_whole = copy.deepcopy(whole)
             back_up_aiss = copy.deepcopy(aiss)
+            back_up_final = copy.deepcopy(final)
             back_up_segments_dict = copy.deepcopy(segments_dict)
             back_up_segments_hash = copy.deepcopy(segments_hash)
             back_up_segments = copy.deepcopy(segments)
@@ -577,6 +607,7 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
             if wrong_point_chosen:
                 whole = back_up_whole
                 aiss = back_up_aiss
+                final = back_up_final
                 segments_dict = back_up_segments_dict
                 continue
 
@@ -595,14 +626,18 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
             diff = abs(cur_E - E)
             # if energy become less, we continue
             c += 1
-            if diff < 0:
+            if cur_E < E:
                 c0 = 0
                 E = cur_E
                 # update segments
                 for position in segments_hash[point]:
                     segments[position[0]][position[1]] = np.array(new_point)
                 # update segments_hash
-                segments_hash[new_point] = segments_hash.pop(point)
+                if new_point in segments_hash:
+                    segments_hash[new_point] = segments_hash[new_point] | segments_hash.pop(point)
+                else:
+                    segments_hash[new_point] = segments_hash.pop(point)
+                # toimage(whole).show()
                 continue
             c0 += 1
             Pr = math.exp(-diff / (0.2 * initial_aiss * c**0.997))
@@ -613,12 +648,17 @@ def image_to_ascii(file_name, ratio, Rw=38, perform_deformation=False, more_char
                 for position in segments_hash[point]:
                     segments[position[0]][position[1]] = np.array(new_point)
                 # update segments_hash
-                segments_hash[new_point] = segments_hash.pop(point)
+                if new_point in segments_hash:
+                    segments_hash[new_point] = segments_hash[new_point] | segments_hash.pop(point)
+                else:
+                    segments_hash[new_point] = segments_hash.pop(point)
+                # toimage(whole).show()
                 continue
             else:
                 # revert all data changed
                 whole = back_up_whole
                 aiss = back_up_aiss
+                final = back_up_final
                 segments_dict = back_up_segments_dict
                 segments_hash = back_up_segments_hash
                 segments = back_up_segments
